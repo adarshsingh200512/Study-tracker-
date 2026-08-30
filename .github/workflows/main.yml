@@ -2,7 +2,7 @@ name: Build Study Tracker APK
 
 on:
   push:
-    branches: [main]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -26,52 +26,13 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Extract ZIP
-        run: |
-          mkdir -p extracted
-          unzip -o StudyTracker_Full_GitHub.zip -d extracted
-
-      - name: Find Android project
-        run: |
-          PROJECT=$(find extracted -type f -name "settings.gradle*" -o -name "build.gradle*" | head -1 | xargs -r dirname)
-
-          if [ -z "$PROJECT" ]; then
-            echo "Android project nahi mila."
-            find extracted -maxdepth 4 -type f
-            exit 1
-          fi
-
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT"
-
-      - name: Fix XML ampersand
-        run: |
-          find "$PROJECT" -type f -name "*.xml" -print0 | while IFS= read -r -d '' file; do
-            python3 - "$file" <<'PY'
-import sys
-import re
-
-p = sys.argv[1]
-
-try:
-    data = open(p, "r", encoding="utf-8").read()
-    data = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9A-Fa-f]+;)', '&amp;', data)
-    open(p, "w", encoding="utf-8").write(data)
-except Exception as e:
-    print(f"Skipping {p}: {e}")
-PY
-          done
-
-      - name: Make Gradle executable
-        run: |
-          chmod +x "$PROJECT/gradlew"
-
       - name: Build APK
-        working-directory: ${{ env.PROJECT }}
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: StudyTracker-debug
-          path: "**/build/outputs/apk/debug/*.apk"
+          name: Study-Tracker-APK
+          path: app/build/outputs/apk/release/app-release.apk

@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,61 +21,74 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
 
-      - name: Install Android SDK
+      - name: Find uploaded ZIP
+        id: zip
+        shell: bash
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Extract project ZIP
-        run: |
-          mkdir -p extracted
-
-          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file nahi mila."
+            echo "ERROR: No ZIP file found in repository root."
             exit 1
           fi
 
-          echo "ZIP: $ZIP_FILE"
-          unzip -o "$ZIP_FILE" -d extracted
+          echo "Using ZIP: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Find Android project
+      - name: Extract Android project
+        shell: bash
         run: |
-          PROJECT_DIR=$(find "$GITHUB_WORKSPACE/extracted" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -print -quit | xargs -r dirname)
+          rm -rf extracted
+          mkdir extracted
+          unzip -q "${{ steps.zip.outputs.zip_file }}" -d extracted
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project nahi mila."
-            find extracted -maxdepth 4 -type f | head -100
+          echo "Extracted files:"
+          find extracted -maxdepth 3 -type f | sort
+
+      - name: Check Android project
+        shell: bash
+        run: |
+          if [ ! -f "extracted/settings.gradle" ] && [ ! -f "extracted/settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle/settings.gradle.kts not found."
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT_DIR"
+          if [ ! -f "extracted/app/build.gradle" ] && [ ! -f "extracted/app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle/app/build.gradle.kts not found."
+            exit 1
+          fi
 
-      - name: Install Gradle
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
-          unzip -q gradle-8.11.1-bin.zip -d "$HOME/gradle"
-          echo "$HOME/gradle/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+          echo "Android project detected successfully."
 
       - name: Build Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: extracted
+        shell: bash
         run: |
-          gradle assembleDebug --stacktrace
+          gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Find APK
+        shell: bash
         run: |
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+          APK=$(find extracted/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+          cp "$APK" StudyTracker-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Study-Tracker-APK
-          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          name: StudyTracker-debug-APK
+          path: StudyTracker-debug.apk
           if-no-files-found: error

@@ -2,7 +2,8 @@ name: Build Study Tracker APK
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -17,91 +18,189 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
-          cache: gradle
+          java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 35
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Install Gradle 8.11.1
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
-          unzip -q gradle-8.11.1-bin.zip
-          echo "$GITHUB_WORKSPACE/gradle-8.11.1/bin" >> "$GITHUB_PATH"
-          gradle --version
-
-      - name: Find and extract Study Tracker ZIP
+      - name: Install Android SDK
         shell: bash
         run: |
           set -e
-          mkdir -p "$RUNNER_TEMP/study-project"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -iname 'Study-Tracker-FINAL-GITHUB.zip' -print -quit)"
+      - name: Install Gradle 8.11.1
+        shell: bash
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+
+          unzip -q gradle-8.11.1-bin.zip
+
+          echo "$RUNNER_TEMP/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+
+          gradle --version
+
+      - name: Find Study Tracker ZIP
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=""
+
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            -iname "Study-Tracker-FINAL-GITHUB.zip" \
+            -o -iname "*.zip" \
+            -print -quit)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Study-Tracker-FINAL-GITHUB.zip was not found."
-            echo "If the Android project is already extracted, the next step will use it directly."
-          else
-            echo "Using ZIP: $ZIP_FILE"
-            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/study-project"
+            echo "ERROR: No ZIP file found in repository."
+            echo ""
+            echo "Repository files:"
+            find "$GITHUB_WORKSPACE" -maxdepth 4 -type f | sort
+            exit 1
           fi
+
+          echo "ZIP found:"
+          echo "$ZIP_FILE"
+
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract Study Tracker project
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$RUNNER_TEMP/study-project"
+          mkdir -p "$RUNNER_TEMP/study-project"
+
+          unzip -q "$ZIP_FILE" \
+            -d "$RUNNER_TEMP/study-project"
+
+          echo "Extraction completed."
+
+          echo "Extracted files:"
+          find "$RUNNER_TEMP/study-project" \
+            -maxdepth 5 \
+            -type f | sort | head -200
 
       - name: Locate Android project
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR="$(find "$RUNNER_TEMP/study-project" "$GITHUB_WORKSPACE" \
-            -type f -name settings.gradle -o -type f -name settings.gradle.kts 2>/dev/null \
-            | sed 's#/settings.gradle.kts$##; s#/settings.gradle$##' \
-            | head -n 1)"
+          PROJECT_DIR=""
+
+          SETTINGS_FILE="$(find "$RUNNER_TEMP/study-project" \
+            -type f \
+            -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+            -print -quit)"
+
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: No settings.gradle or settings.gradle.kts found."
-            echo "Expected project files from Study-Tracker-FINAL-GITHUB.zip."
+            echo "ERROR: Android settings.gradle not found."
+
+            echo "Searching extracted project:"
+            find "$RUNNER_TEMP/study-project" \
+              -maxdepth 6 \
+              -type f | sort
+
             exit 1
           fi
 
-          echo "Android project found at: $PROJECT_DIR"
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] &&
+             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+
+            echo "ERROR: app Gradle file not found."
+
+            echo "Project directory:"
+            echo "$PROJECT_DIR"
+
+            echo "Project contents:"
+            find "$PROJECT_DIR" \
+              -maxdepth 4 \
+              -type f | sort
+
+            exit 1
+          fi
+
+          echo "Android project found:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project contents:"
+      - name: Check Android project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+          echo ""
+          echo "settings.gradle:"
           ls -la "$PROJECT_DIR"
-          echo "App module:"
+
+          echo ""
+          echo "app directory:"
           ls -la "$PROJECT_DIR/app"
 
       - name: Build debug APK
         shell: bash
         run: |
           set -e
-          cd "$PROJECT_DIR"
-          gradle :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Verify APK
+          cd "$PROJECT_DIR"
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            :app:assembleDebug
+
+      - name: Find APK
         shell: bash
         run: |
           set -e
-          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created."
-            find "$PROJECT_DIR/app/build" -maxdepth 6 -type f 2>/dev/null || true
+
+          APK="$(find "$PROJECT_DIR" \
+            -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "Build output:"
+            find "$PROJECT_DIR" \
+              -type f \
+              -path "*/build/*" | sort | head -200
+
             exit 1
           fi
-          echo "APK created successfully: $APK"
-          ls -lh "$APK"
+
+          echo "APK generated successfully:"
+          echo "$APK"
+
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/Study-Tracker-debug.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
-        with:
-          name: Study-Tracker-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          

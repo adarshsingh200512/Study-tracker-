@@ -11,113 +11,91 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Java 17
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # 4. Find and extract ZIP if necessary
-      - name: Prepare Android project
+      - name: Find Android Project
         shell: bash
         run: |
           set -e
 
-          echo "Repository contents:"
-          ls -la
+          echo "Checking repository..."
 
-          # If Gradle project is already in root, use it
-          if [ -f "gradlew" ] && { [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; }; then
-            echo "Android project found in repository root."
-            echo "PROJECT_DIR=$PWD" >> "$GITHUB_ENV"
-            exit 0
-          fi
+          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            PROJECT_DIR="$PWD"
+            echo "Project found in root."
+          else
+            ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
 
-          # Otherwise find ZIP file
-          ZIP_FILE=$(find . -maxdepth 2 -type f \
-            \( -iname "*.zip" \) | head -n 1)
+            if [ -z "$ZIP_FILE" ]; then
+              echo "ERROR: Android project/ZIP not found."
+              exit 1
+            fi
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No Android project or ZIP file found."
-            echo "Available files:"
-            find . -maxdepth 3 -type f | head -n 100
-            exit 1
-          fi
+            echo "ZIP found: $ZIP_FILE"
 
-          echo "ZIP found: $ZIP_FILE"
+            mkdir -p extracted-project
+            unzip -o "$ZIP_FILE" -d extracted-project
 
-          mkdir -p extracted-project
-
-          unzip -o "$ZIP_FILE" -d extracted-project
-
-          echo "Extracted files:"
-          find extracted-project -maxdepth 4 -type f | head -n 100
-
-          # Find Gradle project inside extracted ZIP
-          PROJECT_DIR=$(find extracted-project -type f \
-            -name "gradlew" -print -quit | xargs -r dirname)
-
-          # If gradlew is not found, look for settings.gradle
-          if [ -z "$PROJECT_DIR" ]; then
             PROJECT_DIR=$(find extracted-project -type f \
               \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
               -print -quit | xargs -r dirname)
+
+            if [ -z "$PROJECT_DIR" ]; then
+              echo "ERROR: settings.gradle not found."
+              exit 1
+            fi
+
+            PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
           fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android Gradle project was not found inside ZIP."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-
-          echo "Android project directory:"
-          echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # 5. Check Android project
-      - name: Check Android project
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+          ls -la "$PROJECT_DIR"
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Check Android Project
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "Project directory:"
-          pwd
-
-          echo "Project files:"
-          ls -la
+          echo "Checking Gradle project..."
 
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle or settings.gradle.kts not found."
+            echo "ERROR: settings.gradle not found."
             exit 1
           fi
 
-          if [ ! -f "gradlew" ]; then
-            echo "ERROR: gradlew not found."
+          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
+            echo "ERROR: build.gradle not found."
             exit 1
           fi
 
-          chmod +x gradlew
+          if [ ! -d "app" ]; then
+            echo "ERROR: app folder not found."
+            exit 1
+          fi
 
           echo "Android project check passed."
 
-      # 6. Configure Gradle
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      # 7. Build Debug APK
       - name: Build Debug APK
         shell: bash
         run: |
@@ -125,22 +103,20 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          chmod +x gradlew
+          echo "Starting APK build..."
 
-          ./gradlew assembleDebug --stacktrace
+          gradle assembleDebug --stacktrace --no-daemon
 
-      # 8. Find APK
       - name: Find APK
         shell: bash
         run: |
-          echo "Searching for APK..."
+          echo "APK files:"
 
           find "$PROJECT_DIR" \
             -type f \
             -name "*.apk" \
             -print
 
-      # 9. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

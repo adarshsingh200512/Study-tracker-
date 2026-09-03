@@ -22,3 +22,52 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Find Android Project
+        run: |
+          set -e
+          ZIP_FILE=$(find . -type f -iname "*.zip" | head -n 1)
+
+          if [ -n "$ZIP_FILE" ]; then
+            rm -rf extracted-project
+            mkdir extracted-project
+            unzip -o "$ZIP_FILE" -d extracted-project
+            PROJECT_DIR=$(find extracted-project -type f -name "settings.gradle" -print -quit | xargs dirname)
+          else
+            PROJECT_DIR="$PWD"
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project: $PROJECT_DIR"
+
+      - name: Validate Android Project
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+
+          test -f settings.gradle
+          test -d app
+
+          echo "Android project found:"
+          ls -la
+
+      - name: Build Debug APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Find APK
+        run: |
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StudyTracker-APK
+          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
